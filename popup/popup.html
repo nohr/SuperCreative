@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <header>
+    <h2>SuperCreative</h2>
+    <span id="version">v1.0</span>
+  </header>
+
+  <hr>
+
+  <section class="creatives">
+    <label>Creatives Found:</label>
+    <button id="select-all-btn" class="btn-secondary">Select All</button>
+    <div id="creatives-list" class="creatives-list">
+      <span class="loading">Scanning for creatives...</span>
+    </div>
+  </section>
+
+  <hr>
+
+  <section class="controls" id="controls-section">
+    <label>Controls:</label>
+    <div class="control-group">
+      <span>Show Guide (50% opacity)</span>
+      <label class="switch">
+        <input type="checkbox" id="toggle-guide">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </section>
+
+  <script src="../lib/browser-polyfill.js"></script>
+  <script src="popup.js"></script>
+</body>
+
+</html>

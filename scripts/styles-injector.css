@@ -1,0 +1,6 @@
+/* Highlight selected creatives (iframes) */
+.qa-creative-selected {
+  outline: 4px solid #007aff !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 12px rgba(0, 122, 255, 0.6) !important;
+}

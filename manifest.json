@@ -1,10 +1,56 @@
 {
-  "name": "SuperCreative",
-  "description": "Base Level Extension",
-  "version": "1.0",
   "manifest_version": 3,
+  "name": "SuperCreative",
+  "version": "0.0.2",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "webNavigation",
+    "storage",
+    "commands"
+  ],
   "action": {
-    "default_popup": "hello.html",
-    "default_icon": "hello_extensions.png"
-  }
+    "default_popup": "popup/popup.html",
+    "default_icon": "icons/hello_extensions.png"
+  },
+  "background": {
+    "service_worker": "service.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "scripts/styles-injector.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "commands": {
+    "reload": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "reload the extention"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://doc-04-6k-adspreview.googleusercontent.com/preview/*",
+        "https://www.google.com/doubleclick/preview/dynamic/previewsheet/*",
+        "http://localhost:62585/*",
+        "https://s0.2mdn.net/*",
+        "https://tpc.googlesyndication.com/*"
+      ],
+      "js": [
+        "lib/browser-polyfill.js",
+        "scripts/content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_end"
+    }
+  ]
 }
