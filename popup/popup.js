@@ -21,28 +21,31 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateCreativeSelection(tab.id);
   });
 
-  // Show Guide control
-  document.getElementById("toggle-guide").addEventListener("change", (e) => {
-    applyControl(tab.id, "toggleGuide", e.target.checked);
+  // Guide opacity slider
+  document.getElementById("guide-opacity-slider").addEventListener("input", (e) => {
+    const sliderValue = parseInt(e.target.value);
+    const opacityMap = { 0: 0, 1: 0.5, 2: 1 };
+    const opacity = opacityMap[sliderValue];
+    applyControl(tab.id, "toggleGuide", opacity);
   });
 });
 
 /**
  * Save current state to storage
  */
-async function saveState(tabId, creatives = null, selections = null, guideEnabled = null) {
+async function saveState(tabId, creatives = null, selections = null, guideOpacity = null) {
   const data = await browser.storage.local.get(`tab-${tabId}`);
   const currentState = data[`tab-${tabId}`] || {
     creatives: [],
     selections: [],
-    guideEnabled: false,
+    guideOpacity: 0,
   };
 
   // Update only the fields that were provided
   const newState = {
     creatives: creatives !== null ? creatives : currentState.creatives,
     selections: selections !== null ? selections : currentState.selections,
-    guideEnabled: guideEnabled !== null ? guideEnabled : currentState.guideEnabled,
+    guideOpacity: guideOpacity !== null ? guideOpacity : currentState.guideOpacity,
     timestamp: Date.now(),
   };
 
@@ -76,9 +79,11 @@ async function restoreState(tabId) {
     updateCreativeSelection(tabId);
   }
 
-  // Restore guide state
-  if (state.guideEnabled !== undefined) {
-    document.getElementById("toggle-guide").checked = state.guideEnabled;
+  // Restore guide opacity
+  if (state.guideOpacity !== undefined) {
+    const opacityToSlider = { 0: 0, 0.5: 1, 1: 2 };
+    const sliderValue = opacityToSlider[state.guideOpacity] ?? 0;
+    document.getElementById("guide-opacity-slider").value = sliderValue;
   }
 }
 
@@ -90,13 +95,41 @@ async function loadCreatives(tabId) {
     console.log("[GWD QA] Loading creatives from tab:", tabId);
     // Get all frames in the tab
     const frames = await browser.webNavigation.getAllFrames({ tabId });
-    console.log("[GWD QA] Found frames in tab:", frames);
+    console.log("[GWD QA] Found frames from getAllFrames:", frames.map(f => ({ frameId: f.frameId, url: f.url.substring(0, 50) })));
 
     let allCreatives = [];
     let creativeIndex = 0;
 
+    // Always query main frame (frameId 0) first
+    const mainFrameFn = async () => {
+      try {
+        const response = await browser.tabs.sendMessage(tabId, { action: "getCreatives" }, { frameId: 0 });
+        console.log("[GWD QA] Main frame (0) returned:", response?.length || 0, "creatives");
+        return response || [];
+      } catch (err) {
+        console.log("[GWD QA] Main frame query failed:", err.message);
+        return [];
+      }
+    };
+
+    const mainFrameCreatives = await mainFrameFn();
+    if (mainFrameCreatives.length > 0) {
+      mainFrameCreatives.forEach((creative) => {
+        allCreatives.push({
+          ...creative,
+          index: creativeIndex++,
+          frameId: 0,
+        });
+      });
+    }
+
+    // Then query detected iframes
     // Query each frame for creatives
     for (const frame of frames) {
+      // Skip main frame since we already queried it
+      if (frame.frameId === 0) {
+        continue;
+      }
       console.log(
         `[GWD QA] Querying frame ${frame.frameId} (${frame.url.substring(0, 50)}...)`
       );
@@ -163,8 +196,13 @@ async function loadCreatives(tabId) {
     if (allCreatives.length === 0) {
       creativesList.innerHTML =
         '<span class="loading">No creatives found on this page</span>';
+      document.getElementById("select-all-btn").style.display = "none";
       return;
     }
+
+    // Hide Select All button if only one creative
+    document.getElementById("select-all-btn").style.display =
+      allCreatives.length > 1 ? "block" : "none";
 
     allCreatives.forEach((creative) => {
       const label = document.createElement("label");
@@ -229,24 +267,22 @@ function updateCreativeSelection(tabId) {
 
   // Enable/disable controls based on selection
   const controlsSection = document.getElementById("controls-section");
-  const toggleGuide = document.getElementById("toggle-guide");
-  const toggleGuideLabel = document.querySelector("label.switch");
+  const guideSlider = document.getElementById("guide-opacity-slider");
+  const sliderContainer = document.querySelector(".guide-slider-container");
 
   if (selectedCheckboxes.length > 0) {
-    toggleGuide.checked = false;
-
     // Check if all selected creatives have guides
     const allHaveGuides = Array.from(selectedCheckboxes).every((cb) => {
       return cb.getAttribute("data-has-guide") === "true";
     });
 
-    // Disable/enable toggle based on guide availability
+    // Enable/disable slider based on guide availability
     if (allHaveGuides) {
-      toggleGuide.disabled = false;
-      toggleGuideLabel.classList.remove("disabled");
+      guideSlider.disabled = false;
+      sliderContainer.classList.remove("disabled");
     } else {
-      toggleGuide.disabled = true;
-      toggleGuideLabel.classList.add("disabled");
+      guideSlider.disabled = true;
+      sliderContainer.classList.add("disabled");
     }
 
     // Send highlight to main frame (frame 0) to highlight iframes
@@ -262,8 +298,8 @@ function updateCreativeSelection(tabId) {
     // Save state (update selections only)
     saveState(tabId, null, selectedIndices, null);
   } else {
-    toggleGuide.disabled = true;
-    toggleGuideLabel.classList.add("disabled");
+    guideSlider.disabled = true;
+    sliderContainer.classList.add("disabled");
 
     // Clear highlights in main frame
     browser.tabs.sendMessage(
@@ -283,7 +319,7 @@ function updateCreativeSelection(tabId) {
 /**
  * Apply a control action to selected creatives
  */
-function applyControl(tabId, action, enabled) {
+function applyControl(tabId, action, opacity) {
   const selectedCheckboxes = document.querySelectorAll(
     ".creative-checkbox:checked"
   );
@@ -310,12 +346,12 @@ function applyControl(tabId, action, enabled) {
       {
         action: "toggleGuide",
         selectedIndices: indices,
-        enabled: enabled,
+        opacity: opacity,
       },
       { frameId: parseInt(frameId) }
     );
   });
 
-  // Save guide state (update guideEnabled only)
-  saveState(tabId, null, null, enabled);
+  // Save guide opacity state
+  saveState(tabId, null, null, opacity);
 }

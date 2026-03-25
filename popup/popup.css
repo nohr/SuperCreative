@@ -216,3 +216,55 @@ input:checked + .slider:before {
   background-color: #666 !important;
   cursor: not-allowed;
 }
+
+/* Guide Opacity Slider */
+.guide-slider-container {
+  width: 100%;
+  padding: 8px 0;
+}
+
+.guide-slider-container.disabled input[type="range"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+input[type="range"]#guide-opacity-slider {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #444;
+  outline: none;
+  -webkit-appearance: none;
+  accent-color: var(--primary);
+}
+
+input[type="range"]#guide-opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  box-shadow: 0 0 4px rgba(0, 122, 255, 0.5);
+}
+
+input[type="range"]#guide-opacity-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 4px rgba(0, 122, 255, 0.5);
+}
+
+.guide-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: #888;
+  margin-top: 4px;
+}
+

@@ -1,6 +1,19 @@
-/* Highlight selected creatives (iframes) */
+/* Highlight selected creatives (iframes) with pulsing animation */
 .qa-creative-selected {
   outline: 4px solid #007aff !important;
   outline-offset: 2px !important;
   box-shadow: 0 0 12px rgba(0, 122, 255, 0.6) !important;
+  animation: gwd-qa-pulse 1s infinite !important;
+}
+
+/* Pulsing animation for selected creatives */
+@keyframes gwd-qa-pulse {
+  0%, 100% {
+    outline-color: #007aff;
+    box-shadow: 0 0 12px rgba(0, 122, 255, 0.6);
+  }
+  50% {
+    outline-color: #0056b3;
+    box-shadow: 0 0 20px rgba(0, 122, 255, 0.8);
+  }
 }

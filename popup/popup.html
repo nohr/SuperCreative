@@ -26,11 +26,15 @@
   <section class="controls" id="controls-section">
     <label>Controls:</label>
     <div class="control-group">
-      <span>Show Guide (50% opacity)</span>
-      <label class="switch">
-        <input type="checkbox" id="toggle-guide">
-        <span class="slider"></span>
-      </label>
+      <span>Guide Opacity</span>
+      <div class="guide-slider-container">
+        <input type="range" id="guide-opacity-slider" min="0" max="2" value="0" step="1">
+        <div class="guide-labels">
+          <span class="label-0">Hidden</span>
+          <span class="label-1">50%</span>
+          <span class="label-2">Visible</span>
+        </div>
+      </div>
     </div>
   </section>
 
