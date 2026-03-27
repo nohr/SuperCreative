@@ -1,45 +1,35 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
 </head>
-
 <body>
-  <header>
-    <h2>SuperCreative</h2>
-    <span id="version">v1.0</span>
+
+  <header class="header">
+    <span class="logo">SuperCreative</span>
+    <span id="version" class="version-badge"></span>
   </header>
 
-  <hr>
-
-  <section class="creatives">
-    <label>Creatives Found:</label>
-    <button id="select-all-btn" class="btn-secondary">Select All</button>
-    <div id="creatives-list" class="creatives-list">
-      <span class="loading">Scanning for creatives...</span>
+  <div class="section">
+    <div class="section-header">
+      <span class="section-label">Creatives</span>
+      <button id="select-all-btn" class="btn-ghost" style="display:none">Select all</button>
     </div>
-  </section>
-
-  <hr>
-
-  <section class="controls" id="controls-section">
-    <label>Controls:</label>
-    <div class="control-group">
-      <span>Guide Opacity</span>
-      <div class="guide-slider-container">
-        <input type="range" id="guide-opacity-slider" min="0" max="2" value="0" step="1">
-        <div class="guide-labels">
-          <span class="label-0">Hidden</span>
-          <span class="label-1">50%</span>
-          <span class="label-2">Visible</span>
-        </div>
-      </div>
+    <div id="creatives-list" class="list-panel">
+      <span class="placeholder">Scanning for creatives…</span>
     </div>
-  </section>
+  </div>
+
+  <div class="section" id="guides-section" style="display:none">
+    <div class="section-divider"></div>
+    <div class="section-header">
+      <span class="section-label">Guides</span>
+    </div>
+    <div id="guide-sliders" class="guide-sliders"></div>
+  </div>
 
   <script src="../lib/browser-polyfill.js"></script>
   <script src="popup.js"></script>
 </body>
-
 </html>

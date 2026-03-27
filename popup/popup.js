@@ -1,357 +1,227 @@
 document.addEventListener("DOMContentLoaded", async () => {
-  console.log("[GWD QA] Popup opened");
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  console.log("[GWD QA] Active tab:", tab.id, tab.url);
 
-  // Set version from manifest
+  // Version badge
   const manifest = browser.runtime.getManifest();
   document.getElementById("version").textContent = `v${manifest.version}`;
 
-  // Load creatives and display them
   await loadCreatives(tab.id);
+  await restoreSelections(tab.id);
 
-  // Restore previous selections and guide state
-  await restoreState(tab.id);
-
-  // Select All button
   document.getElementById("select-all-btn").addEventListener("click", () => {
-    const checkboxes = document.querySelectorAll(".creative-checkbox");
-    const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
-    checkboxes.forEach((cb) => (cb.checked = !allChecked));
-    updateCreativeSelection(tab.id);
-  });
-
-  // Guide opacity slider
-  document.getElementById("guide-opacity-slider").addEventListener("input", (e) => {
-    const sliderValue = parseInt(e.target.value);
-    const opacityMap = { 0: 0, 1: 0.5, 2: 1 };
-    const opacity = opacityMap[sliderValue];
-    applyControl(tab.id, "toggleGuide", opacity);
+    const cbs      = [...document.querySelectorAll(".creative-checkbox")];
+    const allOn    = cbs.every((cb) => cb.checked);
+    cbs.forEach((cb) => (cb.checked = !allOn));
+    syncCheckedStyles();
+    updateSelection(tab.id);
   });
 });
 
-/**
- * Save current state to storage
- */
-async function saveState(tabId, creatives = null, selections = null, guideOpacity = null) {
-  const data = await browser.storage.local.get(`tab-${tabId}`);
-  const currentState = data[`tab-${tabId}`] || {
-    creatives: [],
-    selections: [],
-    guideOpacity: 0,
-  };
+// ─── Load ─────────────────────────────────────────────────────────────────────
 
-  // Update only the fields that were provided
-  const newState = {
-    creatives: creatives !== null ? creatives : currentState.creatives,
-    selections: selections !== null ? selections : currentState.selections,
-    guideOpacity: guideOpacity !== null ? guideOpacity : currentState.guideOpacity,
-    timestamp: Date.now(),
-  };
-
-  await browser.storage.local.set({ [`tab-${tabId}`]: newState });
-  console.log("[GWD QA] State saved for tab", tabId);
-}
-
-/**
- * Restore previous state from storage
- */
-async function restoreState(tabId) {
-  const data = await browser.storage.local.get(`tab-${tabId}`);
-  const state = data[`tab-${tabId}`];
-
-  if (!state) {
-    console.log("[GWD QA] No saved state for tab", tabId);
-    return;
-  }
-
-  console.log("[GWD QA] Restoring state for tab", tabId);
-
-  // Restore selections
-  if (state.selections && state.selections.length > 0) {
-    const checkboxes = document.querySelectorAll(".creative-checkbox");
-    checkboxes.forEach((cb) => {
-      const index = parseInt(cb.getAttribute("data-index"));
-      cb.checked = state.selections.includes(index);
-    });
-
-    // Update UI to reflect restored selections
-    updateCreativeSelection(tabId);
-  }
-
-  // Restore guide opacity
-  if (state.guideOpacity !== undefined) {
-    const opacityToSlider = { 0: 0, 0.5: 1, 1: 2 };
-    const sliderValue = opacityToSlider[state.guideOpacity] ?? 0;
-    document.getElementById("guide-opacity-slider").value = sliderValue;
-  }
-}
-
-/**
- * Load creatives from all frames (main + iframes)
- */
 async function loadCreatives(tabId) {
+  const list = document.getElementById("creatives-list");
+
   try {
-    console.log("[GWD QA] Loading creatives from tab:", tabId);
-    // Get all frames in the tab
     const frames = await browser.webNavigation.getAllFrames({ tabId });
-    console.log("[GWD QA] Found frames from getAllFrames:", frames.map(f => ({ frameId: f.frameId, url: f.url.substring(0, 50) })));
+    const allCreatives = [];
+    let globalIndex = 0;
 
-    let allCreatives = [];
-    let creativeIndex = 0;
-
-    // Always query main frame (frameId 0) first
-    const mainFrameFn = async () => {
-      try {
-        const response = await browser.tabs.sendMessage(tabId, { action: "getCreatives" }, { frameId: 0 });
-        console.log("[GWD QA] Main frame (0) returned:", response?.length || 0, "creatives");
-        return response || [];
-      } catch (err) {
-        console.log("[GWD QA] Main frame query failed:", err.message);
-        return [];
+    // Main frame first, then child frames
+    for (const frame of [{ frameId: 0 }, ...frames.filter((f) => f.frameId !== 0)]) {
+      let result = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = await browser.tabs.sendMessage(
+            tabId,
+            { action: "getCreatives" },
+            { frameId: frame.frameId }
+          );
+          break;
+        } catch (_) {
+          if (attempt < 2) await sleep(300);
+        }
       }
-    };
+      if (!result?.length) continue;
 
-    const mainFrameCreatives = await mainFrameFn();
-    if (mainFrameCreatives.length > 0) {
-      mainFrameCreatives.forEach((creative) => {
+      for (const creative of result) {
         allCreatives.push({
           ...creative,
-          index: creativeIndex++,
-          frameId: 0,
+          globalIndex: globalIndex++, // popup-assigned global index
+          frameId: frame.frameId,     // creative.index is the local (frame-level) index
         });
-      });
-    }
-
-    // Then query detected iframes
-    // Query each frame for creatives
-    for (const frame of frames) {
-      // Skip main frame since we already queried it
-      if (frame.frameId === 0) {
-        continue;
-      }
-      console.log(
-        `[GWD QA] Querying frame ${frame.frameId} (${frame.url.substring(0, 50)}...)`
-      );
-      try {
-        // Add retry logic - try up to 3 times with delays
-        let frameCreatives = null;
-        let success = false;
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            frameCreatives = await browser.tabs.sendMessage(
-              tabId,
-              { action: "getCreatives" },
-              { frameId: frame.frameId }
-            );
-            success = true;
-            break;
-          } catch (err) {
-            if (attempt < 2) {
-              // Wait before retrying
-              await new Promise((resolve) => setTimeout(resolve, 300));
-            }
-          }
-        }
-
-        if (!success) {
-          console.log(
-            `[GWD QA] Frame ${frame.frameId} not responding after retries`
-          );
-          continue;
-        }
-
-        console.log(
-          `[GWD QA] Frame ${frame.frameId} response:`,
-          frameCreatives
-        );
-
-        if (frameCreatives && frameCreatives.length > 0) {
-          console.log(
-            `[GWD QA] Frame ${frame.frameId} has ${frameCreatives.length} creatives`
-          );
-          // Re-index creatives to be globally unique
-          frameCreatives.forEach((creative) => {
-            allCreatives.push({
-              ...creative,
-              index: creativeIndex++,
-              frameId: frame.frameId,
-            });
-          });
-        }
-      } catch (err) {
-        console.log(
-          `[GWD QA] Error querying frame ${frame.frameId}:`,
-          err.message
-        );
       }
     }
 
-    console.log("[GWD QA] Total creatives found:", allCreatives.length);
+    list.innerHTML = "";
 
-    const creativesList = document.getElementById("creatives-list");
-    creativesList.innerHTML = "";
-
-    if (allCreatives.length === 0) {
-      creativesList.innerHTML =
-        '<span class="loading">No creatives found on this page</span>';
+    if (!allCreatives.length) {
+      list.innerHTML = '<span class="placeholder">No creatives found</span>';
       document.getElementById("select-all-btn").style.display = "none";
       return;
     }
 
-    // Hide Select All button if only one creative
-    document.getElementById("select-all-btn").style.display =
-      allCreatives.length > 1 ? "block" : "none";
+    const selectAllBtn = document.getElementById("select-all-btn");
+    selectAllBtn.style.display = allCreatives.length > 1 ? "block" : "none";
 
-    allCreatives.forEach((creative) => {
+    for (const creative of allCreatives) {
       const label = document.createElement("label");
       label.className = "creative-item";
       label.innerHTML = `
-        <input type="checkbox" class="creative-checkbox" data-index="${creative.index}" data-frame-id="${creative.frameId}" data-has-guide="${creative.hasGuide}">
-        <span class="creative-label">${creative.id}</span>
+        <input type="checkbox" class="creative-checkbox"
+          data-global-index="${creative.globalIndex}"
+          data-local-index="${creative.index}"
+          data-frame-id="${creative.frameId}"
+          data-has-guide="${creative.hasGuide}"
+          data-accent="${creative.accentColor || ""}">
+        <span class="creative-label" title="${creative.id}">${creative.id}</span>
+        ${creative.hasGuide ? '<span class="guide-dot"></span>' : ""}
       `;
-      creativesList.appendChild(label);
+      list.appendChild(label);
+    }
+
+    document.querySelectorAll(".creative-checkbox").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        syncCheckedStyles();
+        updateSelection(tabId);
+      });
     });
 
-    // Add event listeners to checkboxes
-    document.querySelectorAll(".creative-checkbox").forEach((checkbox) => {
-      checkbox.addEventListener("change", () => updateCreativeSelection(tabId));
-    });
-
-    // Save creatives list only (preserve selections and guide state)
-    await saveState(tabId, allCreatives, null, null);
+    await browser.storage.local.set({ [`tab-${tabId}`]: { creatives: allCreatives } });
   } catch (err) {
-    console.error("[GWD QA] Error loading creatives:", err);
-    document.getElementById("creatives-list").innerHTML =
-      '<span class="loading">Error detecting creatives</span>';
+    console.error("[GWD QA] loadCreatives error:", err);
+    list.innerHTML = '<span class="placeholder">Error detecting creatives</span>';
   }
 }
 
-/**
- * Update creative selection and highlight them
- */
-function updateCreativeSelection(tabId) {
-  const selectedCheckboxes = document.querySelectorAll(
-    ".creative-checkbox:checked"
-  );
+// ─── Selection ────────────────────────────────────────────────────────────────
 
-  // Get selected indices for storage
-  const selectedIndices = Array.from(selectedCheckboxes).map((cb) =>
-    parseInt(cb.getAttribute("data-index"))
-  );
+async function updateSelection(tabId) {
+  const checked = [...document.querySelectorAll(".creative-checkbox:checked")];
 
-  // Group selections by frameId for highlighting
+  // Save selected global indices
+  const selectedGlobal = checked.map((cb) => parseInt(cb.dataset.globalIndex));
+  await saveSelections(tabId, selectedGlobal);
+
+  // Build per-frame local-index map for highlight messages
+  const allFrameIds = new Set(
+    [...document.querySelectorAll(".creative-checkbox")].map((cb) => parseInt(cb.dataset.frameId))
+  );
   const selectionsByFrame = {};
-  selectedCheckboxes.forEach((cb) => {
-    const frameId = parseInt(cb.getAttribute("data-frame-id"));
-    const index = parseInt(cb.getAttribute("data-index"));
-
-    if (!selectionsByFrame[frameId]) {
-      selectionsByFrame[frameId] = [];
-    }
-    selectionsByFrame[frameId].push(index);
+  checked.forEach((cb) => {
+    const fid = parseInt(cb.dataset.frameId);
+    if (!selectionsByFrame[fid]) selectionsByFrame[fid] = [];
+    selectionsByFrame[fid].push(parseInt(cb.dataset.localIndex));
   });
 
-  // Send highlight messages to each frame
-  Object.entries(selectionsByFrame).forEach(([frameId, indices]) => {
-    browser.tabs.sendMessage(
-      tabId,
-      {
-        action: "highlightCreatives",
-        selectedIndices: indices,
-      },
-      { frameId: parseInt(frameId) }
-    );
-  });
+  // Send highlight to every frame (empty localIndices clears the frame's highlight)
+  for (const frameId of allFrameIds) {
+    browser.tabs
+      .sendMessage(tabId, { action: "highlightCreatives", localIndices: selectionsByFrame[frameId] || [] }, { frameId })
+      .catch(() => {});
+  }
 
-  // Enable/disable controls based on selection
-  const controlsSection = document.getElementById("controls-section");
-  const guideSlider = document.getElementById("guide-opacity-slider");
-  const sliderContainer = document.querySelector(".guide-slider-container");
-
-  if (selectedCheckboxes.length > 0) {
-    // Check if all selected creatives have guides
-    const allHaveGuides = Array.from(selectedCheckboxes).every((cb) => {
-      return cb.getAttribute("data-has-guide") === "true";
-    });
-
-    // Enable/disable slider based on guide availability
-    if (allHaveGuides) {
-      guideSlider.disabled = false;
-      sliderContainer.classList.remove("disabled");
-    } else {
-      guideSlider.disabled = true;
-      sliderContainer.classList.add("disabled");
-    }
-
-    // Send highlight to main frame (frame 0) to highlight iframes
-    browser.tabs.sendMessage(
-      tabId,
-      {
-        action: "highlightCreatives",
-        selectedIndices: selectedIndices,
-      },
-      { frameId: 0 }
-    );
-
-    // Save state (update selections only)
-    saveState(tabId, null, selectedIndices, null);
+  // Apply accent color from first selected creative that has one
+  const accentColor = checked.map((cb) => cb.dataset.accent).find(Boolean);
+  if (accentColor) {
+    document.documentElement.style.setProperty("--accent", accentColor);
+    document.documentElement.style.setProperty("--accent-glow", rgbToGlow(accentColor));
   } else {
-    guideSlider.disabled = true;
-    sliderContainer.classList.add("disabled");
+    document.documentElement.style.removeProperty("--accent");
+    document.documentElement.style.removeProperty("--accent-glow");
+  }
 
-    // Clear highlights in main frame
-    browser.tabs.sendMessage(
-      tabId,
-      {
-        action: "highlightCreatives",
-        selectedIndices: [],
-      },
-      { frameId: 0 }
-    );
+  // Rebuild guide sliders
+  buildGuideSliders(tabId, checked);
+}
 
-    // Save state (update selections only)
-    saveState(tabId, null, selectedIndices, null);
+// ─── Guide sliders ────────────────────────────────────────────────────────────
+
+async function buildGuideSliders(tabId, checkedCbs) {
+  const { [`tab-${tabId}`]: state } = await browser.storage.local.get(`tab-${tabId}`);
+  const allCreatives = state?.creatives || [];
+
+  const guidesSection = document.getElementById("guides-section");
+  const sliderArea    = document.getElementById("guide-sliders");
+  sliderArea.innerHTML = "";
+
+  if (!checkedCbs.length) { guidesSection.style.display = "none"; return; }
+
+  // Collect unique guides from all selected creatives
+  const selectedGuides = new Set();
+  checkedCbs.forEach((cb) => {
+    const gi       = parseInt(cb.dataset.globalIndex);
+    const creative = allCreatives.find((c) => c.globalIndex === gi);
+    creative?.guides?.forEach((g) => selectedGuides.add(g));
+  });
+
+  if (!selectedGuides.size) { guidesSection.style.display = "none"; return; }
+
+  guidesSection.style.display = "block";
+
+  // All frame IDs participating in the current selection
+  const frameIds = new Set(checkedCbs.map((cb) => parseInt(cb.dataset.frameId)));
+
+  for (const guideId of selectedGuides) {
+    const label    = guideId.replace(/^guide_/, "");
+    const item     = document.createElement("div");
+    item.className = "guide-slider-item";
+    item.innerHTML = `
+      <span class="guide-slider-name" title="${label}">${label}</span>
+      <input type="range" class="guide-slider" min="0" max="2" step="1" value="0"
+             data-guide-id="${guideId}">
+      <div class="guide-tick-labels"><span>Hidden</span><span>50%</span><span>Visible</span></div>
+    `;
+    sliderArea.appendChild(item);
+
+    item.querySelector(".guide-slider").addEventListener("input", (e) => {
+      const opacity = { 0: 0, 1: 0.5, 2: 1 }[parseInt(e.target.value)];
+      for (const frameId of frameIds) {
+        browser.tabs.sendMessage(
+          tabId,
+          { action: "setGuideOpacity", guideId, opacity },
+          { frameId }
+        ).catch(() => {});
+      }
+    });
   }
 }
 
-/**
- * Apply a control action to selected creatives
- */
-function applyControl(tabId, action, opacity) {
-  const selectedCheckboxes = document.querySelectorAll(
-    ".creative-checkbox:checked"
-  );
-  const selectedIndices = Array.from(selectedCheckboxes).map((cb) =>
-    parseInt(cb.getAttribute("data-index"))
-  );
+// ─── State ────────────────────────────────────────────────────────────────────
 
-  // Group selections by frameId
-  const selectionsByFrame = {};
-  selectedCheckboxes.forEach((cb) => {
-    const frameId = parseInt(cb.getAttribute("data-frame-id"));
-    const index = parseInt(cb.getAttribute("data-index"));
+async function saveSelections(tabId, globalIndices) {
+  const existing = (await browser.storage.local.get(`tab-${tabId}`))[`tab-${tabId}`] || {};
+  await browser.storage.local.set({ [`tab-${tabId}`]: { ...existing, selections: globalIndices } });
+}
 
-    if (!selectionsByFrame[frameId]) {
-      selectionsByFrame[frameId] = [];
-    }
-    selectionsByFrame[frameId].push(index);
+async function restoreSelections(tabId) {
+  const data  = (await browser.storage.local.get(`tab-${tabId}`))[`tab-${tabId}`];
+  if (!data?.selections?.length) return;
+
+  const checkboxes = document.querySelectorAll(".creative-checkbox");
+  checkboxes.forEach((cb) => {
+    cb.checked = data.selections.includes(parseInt(cb.dataset.globalIndex));
   });
+  syncCheckedStyles();
+  updateSelection(tabId);
+}
 
-  // Send messages to each frame for toggleGuide
-  Object.entries(selectionsByFrame).forEach(([frameId, indices]) => {
-    browser.tabs.sendMessage(
-      tabId,
-      {
-        action: "toggleGuide",
-        selectedIndices: indices,
-        opacity: opacity,
-      },
-      { frameId: parseInt(frameId) }
-    );
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+
+/** Mirror checkbox state to the parent label's visual class. */
+function syncCheckedStyles() {
+  document.querySelectorAll(".creative-item").forEach((label) => {
+    const cb = label.querySelector(".creative-checkbox");
+    label.classList.toggle("is-checked", cb?.checked ?? false);
   });
+}
 
-  // Save guide opacity state
-  saveState(tabId, null, null, opacity);
+/** Convert "rgb(r, g, b)" → "rgba(r, g, b, 0.18)" for glow variable. */
+function rgbToGlow(rgb) {
+  const m = rgb.match(/\d+/g);
+  return m ? `rgba(${m[0]}, ${m[1]}, ${m[2]}, 0.18)` : "rgba(96,165,250,0.18)";
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }

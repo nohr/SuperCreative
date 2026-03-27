@@ -1,19 +1,12 @@
-/* Highlight selected creatives (iframes) with pulsing animation */
-.qa-creative-selected {
-  outline: 4px solid #007aff !important;
-  outline-offset: 2px !important;
-  box-shadow: 0 0 12px rgba(0, 122, 255, 0.6) !important;
-  animation: gwd-qa-pulse 1s infinite !important;
-}
-
-/* Pulsing animation for selected creatives */
+/* GWD QA — injected into ad content frames */
 @keyframes gwd-qa-pulse {
-  0%, 100% {
-    outline-color: #007aff;
-    box-shadow: 0 0 12px rgba(0, 122, 255, 0.6);
+  0%,
+  100% {
+    box-shadow: 0 0 12px var(--qa-glow-dim, rgba(96, 165, 250, 0.4));
+    border-color: var(--qa-border-dim, rgba(96, 165, 250, 0.8));
   }
   50% {
-    outline-color: #0056b3;
-    box-shadow: 0 0 20px rgba(0, 122, 255, 0.8);
+    box-shadow: 0 0 26px var(--qa-glow-bright, rgba(96, 165, 250, 0.7));
+    border-color: var(--qa-border-bright, rgba(96, 165, 250, 1));
   }
 }

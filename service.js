@@ -1,182 +1,238 @@
-// Import polyfill if you are using a bundler,
-// or ensure it's available in the global scope.
 import "./lib/browser-polyfill.js";
 
-console.log("[GWD QA] Service worker loaded");
+console.log("[GWD QA] Service worker ready");
 
-// OAuth token management
-let cachedToken = null;
+// ─── Allowed pages ────────────────────────────────────────────────────────────
+
+const ALLOWED_HOSTS = [
+  "adspreview.googleusercontent.com",
+  "www.google.com/doubleclick/preview",
+  "localhost:62585",
+  "localhost:56258",
+];
+
+function isAllowedPage(url) {
+  return ALLOWED_HOSTS.some((h) => url.includes(h));
+}
+
+// ─── Auth + Drive ─────────────────────────────────────────────────────────────
+
+// NOTE: browser.identity.getAuthToken is Chrome-specific.
+// For Firefox/Safari ports, replace with browser.identity.launchWebAuthFlow.
+
+let _cachedToken = null;
+let _authPromise = null; // NEW: Acts as a lock to prevent concurrent auth spam
 
 async function getAuthToken() {
-  // Check if we have a cached token
-  if (cachedToken) {
-    console.log("[GWD QA] Using cached auth token");
-    return cachedToken;
-  }
+  if (_cachedToken) return _cachedToken;
 
-  // Try to get stored token
-  const { authToken } = await browser.storage.local.get("authToken");
-  if (authToken) {
-    console.log("[GWD QA] Using stored auth token");
-    cachedToken = authToken;
-    return authToken;
-  }
+  // If another creative is already fetching the token, wait for its result!
+  if (_authPromise) return _authPromise;
 
-  // Request new token
-  try {
-    console.log("[GWD QA] Requesting new auth token (interactive)...");
-    const response = await browser.identity.getAuthToken({ interactive: true });
-    console.log("[GWD QA] Got auth token response:", response);
-
-    // Extract token from response object
-    const token = response?.token || response;
-    console.log("[GWD QA] Token type:", typeof token);
-    console.log("[GWD QA] Token value:", typeof token === 'string' ? token.substring(0, 20) + "..." : token);
-
-    if (!token || typeof token !== 'string') {
-      console.error("[GWD QA] Invalid token response - expected string, got:", typeof token);
-      return null;
+  _authPromise = (async () => {
+    const { authToken } = await browser.storage.local.get("authToken");
+    if (authToken) {
+      _cachedToken = authToken;
+      _authPromise = null; // Release lock
+      return authToken;
     }
 
-    cachedToken = token;
-    await browser.storage.local.set({ authToken: token });
-    console.log("[GWD QA] Token saved and cached");
-    return token;
-  } catch (err) {
-    console.error("[GWD QA] Failed to get auth token:", err.message || err);
-    if (err.message && err.message.includes("function")) {
-      console.error("[GWD QA] Possibly incorrect OAuth2 setup in manifest");
-    }
-    return null;
-  }
-}
-
-async function searchGoogleDrive(searchQuery) {
-  console.log("[GWD QA] searchGoogleDrive called with:", searchQuery);
-  const token = await getAuthToken();
-  if (!token) {
-    console.error("[GWD QA] No auth token available - cannot search Google Drive");
-    return null;
-  }
-
-  console.log("[GWD QA] Got auth token, querying Google Drive...");
-
-  try {
-    // Search for the file in both personal and shared drives
-    const query = encodeURIComponent(
-      `name contains "${searchQuery}" and trashed = false`
-    );
-    const url = `https://www.googleapis.com/drive/v3/files?q=${query}&includeTeamDriveItems=true&supportsTeamDrives=true&fields=files(id,name,webContentLink,driveId)&pageSize=1`;
-
-    console.log("[GWD QA] Drive API request URL:", url.substring(0, 80) + "...");
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    console.log("[GWD QA] Drive API response status:", response.status);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error("[GWD QA] Google Drive API error:", response.status, response.statusText);
-      console.error("[GWD QA] Error body:", errorBody);
-
-      if (response.status === 401) {
-        // Token expired, clear cache and retry
-        console.log("[GWD QA] Token expired (401), clearing cache and retrying...");
-        cachedToken = null;
-        await browser.storage.local.remove("authToken");
-        return searchGoogleDrive(searchQuery);
-      }
-      return null;
-    }
-
-    const data = await response.json();
-    console.log("[GWD QA] Drive API response:", data);
-
-    if (data.files && data.files.length > 0) {
-      const file = data.files[0];
-      console.log(`[GWD QA] Found guide: ${file.name} (${file.id})`);
-      // Fetch the file content with auth token
-      const fileResponse = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      if (!fileResponse.ok) {
-        console.error("[GWD QA] Failed to fetch file content:", fileResponse.status);
+    try {
+      const response = await browser.identity.getAuthToken({
+        interactive: true,
+      });
+      const token = response?.token ?? response;
+      if (!token || typeof token !== "string") {
+        console.error("[GWD QA] Invalid token response:", typeof token);
+        _authPromise = null;
         return null;
       }
+      _cachedToken = token;
+      await browser.storage.local.set({ authToken: token });
+      _authPromise = null; // Release lock
+      return token;
+    } catch (err) {
+      console.error("[GWD QA] Auth error:", err.message || err);
+      _authPromise = null; // Release lock
+      return null;
+    }
+  })();
 
-      const blob = await fileResponse.blob();
+  return _authPromise;
+}
 
-      // Convert blob to data URL since createObjectURL doesn't work in service workers
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result;
-          console.log("[GWD QA] Created data URL for image");
-          resolve(dataUrl);
-        };
-        reader.onerror = () => {
-          console.error("[GWD QA] Failed to read blob");
-          reject(reader.error);
-        };
-        reader.readAsDataURL(blob);
-      });
+async function searchGoogleDrive(query) {
+  const token = await getAuthToken();
+  if (!token) return null;
+
+  try {
+    // Split ONLY by underscores, hyphens, or spaces.
+    // DO NOT split by 'x', so "160x600" stays as a single searchable word.
+    // Example: "DCD539_160x600_f2" -> ["DCD539", "160x600", "f2"]
+    const parts = query.split(/[-_ ]+/);
+
+    // 1. MUST use single quotes for Google Drive API strings
+    // 2. MUST exclude folders, or it might accidentally download a folder named "Guides"
+    let qString = `name contains 'guide' and mimeType != 'application/vnd.google-apps.folder' and trashed = false`;
+    let isVariant = false;
+
+    // Add each piece of the query
+    for (const part of parts) {
+      if (!part) continue;
+      qString += ` and name contains '${part}'`;
+      if (part.toLowerCase() === "f1" || part.toLowerCase() === "f2") {
+        isVariant = true;
+      }
     }
 
-    console.log(`[GWD QA] No guide found for: ${searchQuery}`);
-    return null;
+    // Exclude variants when searching for the base guide
+    if (!isVariant) {
+      qString += ` and not name contains 'f1' and not name contains 'f2'`;
+    }
+
+    const q = encodeURIComponent(qString);
+
+    // 3. Updated API parameters: 'supportsTeamDrives' is deprecated, use 'supportsAllDrives'
+    // 4. Added 'orderBy=modifiedTime desc' to guarantee we grab the most recent version
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=modifiedTime desc&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name)&pageSize=1`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (res.status === 401) {
+      // Token expired — clear and retry once
+      _cachedToken = null;
+      await browser.storage.local.remove("authToken");
+      return searchGoogleDrive(query);
+    }
+    if (!res.ok) {
+      console.error(`[GWD QA] Drive API ${res.status}:`, await res.text());
+      return null;
+    }
+
+    const { files } = await res.json();
+    if (!files?.length) return null;
+
+    const fileRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${files[0].id}?alt=media`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!fileRes.ok) return null;
+
+    const blob = await fileRes.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   } catch (err) {
-    console.error("[GWD QA] Error searching Google Drive:", err.message, err);
+    console.error("[GWD QA] Drive error:", err.message);
     return null;
   }
 }
 
-// Listen for requests from content scripts
+// ─── Per-tab state registries ─────────────────────────────────────────────
+// tabCreativeCounts: Map<tabId, Map<rawIdNum, count>> — guarantees unique IDs
+// tabSharedGuides: Map<tabId, Array> — caches found _f1/_f2 variants to share across iframes
+
+const tabCreativeCounts = new Map();
+const tabSharedGuides = new Map();
+
+// ─── Message handler ──────────────────────────────────────────────────────────
+
 browser.runtime.onMessage.addListener((request, sender) => {
-  console.log("[GWD QA] onMessage received - action:", request.action);
+  if (request.action === "shareVariantGuide") {
+    const tabId = sender.tab?.id;
+    if (!tabId) return Promise.resolve(false);
+
+    if (!tabSharedGuides.has(tabId)) tabSharedGuides.set(tabId, []);
+    const cache = tabSharedGuides.get(tabId);
+
+    // Prevent duplicate broadcasts
+    const exists = cache.find((g) => g.guideId === request.guideId);
+    if (!exists) {
+      cache.push(request);
+      // Broadcast to all frames in the tab simultaneously
+      browser.tabs
+        .sendMessage(tabId, {
+          action: "receiveSharedVariant",
+          ...request,
+        })
+        .catch(() => {});
+    }
+    return Promise.resolve(true);
+  }
+
+  if (request.action === "requestSharedVariants") {
+    const tabId = sender.tab?.id;
+    return Promise.resolve(tabSharedGuides.get(tabId) || []);
+  }
+
+  if (request.action === "reserveCreativeId") {
+    const tabId = sender.tab?.id;
+    const { idNum } = request;
+    if (!tabCreativeCounts.has(tabId)) tabCreativeCounts.set(tabId, new Map());
+    const counts = tabCreativeCounts.get(tabId);
+    const count = counts.get(idNum) || 0;
+    counts.set(idNum, count + 1);
+
+    let effectiveIdNum = idNum,
+      originalIdNum = null;
+    if (count > 0) {
+      const m = idNum.match(/^([A-Za-z]+)(\d+)$/);
+      if (m) {
+        effectiveIdNum = `${m[1]}${parseInt(m[2], 10) + count}`.toUpperCase();
+        originalIdNum = idNum;
+      }
+    }
+    return Promise.resolve({ effectiveIdNum, originalIdNum });
+  }
 
   if (request.action === "getGuideURL") {
-    console.log(
-      `[GWD QA] searchGuideURL request for: ${request.searchQuery}`
-    );
-    // Return a promise that will resolve with the guide URL
     return searchGoogleDrive(request.searchQuery);
   }
 
   if (request.action === "clearAuth") {
-    cachedToken = null;
+    _cachedToken = null;
     browser.storage.local.remove("authToken");
     console.log("[GWD QA] Auth cleared");
+    return;
   }
 });
 
-// Auto-open popup on matching pages
-const ALLOWED_URLS = [
-  "https://doc-04-6k-adspreview.googleusercontent.com/preview/",
-  "https://www.google.com/doubleclick/preview/dynamic/previewsheet/",
-  "http://localhost:62585/",
-  "http://localhost:56258/"
-];
+// ─── Tab lifecycle ────────────────────────────────────────────────────────────
 
-function isAllowedPage(url) {
-  return ALLOWED_URLS.some(allowed => url.startsWith(allowed));
-}
+browser.tabs.onRemoved.addListener(async (tabId) => {
+  tabCreativeCounts.delete(tabId);
+  tabSharedGuides.delete(tabId);
+  await browser.storage.local.remove(`tab-${tabId}`);
+});
 
+browser.webNavigation.onBeforeNavigate.addListener(({ tabId, frameId }) => {
+  if (frameId === 0) {
+    tabCreativeCounts.delete(tabId);
+    tabSharedGuides.delete(tabId);
+  }
+});
+
+// Reset ID counters on main-frame navigation (page refresh / new URL)
+browser.webNavigation.onBeforeNavigate.addListener(({ tabId, frameId }) => {
+  if (frameId === 0) tabCreativeCounts.delete(tabId);
+});
+
+// Trigger detection in every frame as it finishes loading
+browser.webNavigation.onCompleted.addListener(({ tabId, frameId, url }) => {
+  if (!isAllowedPage(url)) return;
+  browser.tabs
+    .sendMessage(tabId, { action: "runDetection" }, { frameId })
+    .catch(() => {});
+});
+
+// Auto-open popup when landing on an allowed page
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === "complete" && tab.url && isAllowedPage(tab.url)) {
-    console.log("[GWD QA] Allowed page loaded, attempting to open popup");
-    // Try to open the popup
-    browser.action.openPopup().catch((err) => {
-      console.log("[GWD QA] Could not auto-open popup:", err.message);
-    });
+    browser.action.openPopup().catch(() => {});
   }
 });
