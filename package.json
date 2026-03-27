@@ -1,0 +1,27 @@
+{
+  "name": "supercreative",
+  "version": "0.1.0",
+  "description": "QA tool for reviewing Google Web Designer ad creatives",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@wxt-dev/module-react": "^1.1.2",
+    "typescript": "^5.7.0",
+    "wxt": "^0.20.20"
+  }
+}
